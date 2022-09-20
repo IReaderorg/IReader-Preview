@@ -92,7 +92,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: r${{ env.COMMIT_COUNT }}
-          name: ireader Preview r${{ env.COMMIT_COUNT }}
+          name: IReader Preview r${{ env.COMMIT_COUNT }}
           body: |
             ### Commits
             https://github.com/ireaderorg/ireader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
