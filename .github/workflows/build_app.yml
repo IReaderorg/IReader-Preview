@@ -14,38 +14,134 @@ on:
         description: Creates a draft release
         required: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-app:
-    runs-on: ubuntu-latest
+  BuildBinaries:
+    name: Build application packages
+    strategy:
+      matrix:
+        runtime: [ linux-x64, win-x64, android ]
+        include:
+          - runtime: linux-x64
+            arch: x64
+            os: ubuntu-latest
+            shell: bash
+            build: :desktop:packageUberJarForCurrentOS :desktop:packageDeb
+            setupCl: ./.github/scripts/SetupClUnix.sh
+
+          #          - runtime: linux-fedora-x64
+          #            arch: x64
+          #            os: ubuntu-latest
+          #            shell: bash
+          #            build: :desktop:packageRpm
+          #            setupCl: ./.github/scripts/SetupClUnix.sh
+
+
+
+          - runtime: win-x64
+            arch: x64
+            os: windows-latest
+            shell: powershell
+            build: :desktop:packageUberJarForCurrentOS :desktop:packageMsi
+            setupCl: ./.github/scripts/SetupClWindows.ps1
+
+          - runtime: android
+            arch: x64
+            os: ubuntu-latest
+            shell: bash
+            build: :android:assembleStandardRelease
+            setupCl: ./.github/scripts/SetupClUnix.sh
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
-      - name: Clone Repository (Latest)
-        uses: actions/checkout@v3
+      uses: actions/checkout@v3
         with:
           repository: 'ireaderorg/ireader'
           fetch-depth: 0
         if: github.event.inputs.git-ref == ''
-      - name: Clone Repository (Custom Ref)
-        uses: actions/checkout@v3
-        if: github.event.inputs.git-ref != ''
-        with:
-          repository: 'ireaderorg/ireader'
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.git-ref }}
+        - name: Clone Repository (Custom Ref)
+          uses: actions/checkout@v3
+          if: github.event.inputs.git-ref != ''
+          with:
+            repository: 'ireaderorg/ireader'
+            fetch-depth: 0
+            ref: ${{ github.event.inputs.git-ref }}
 
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          java-version: 11
-          distribution: adopt
+        - name: Set up JDK
+          uses: actions/setup-java@v3
+          with:
+            java-version: 11
+            distribution: adopt
 
-      - name: Get previous release
-        id: last_release
-        uses: InsonusK/get-latest-release@v1.0.1
-        with:
-          myToken: ${{ github.token }}
-          exclude_types: "draft|prerelease"
-          view_top: 1
+        - name: Get previous release
+          id: last_release
+          uses: InsonusK/get-latest-release@v1.0.1
+          with:
+            myToken: ${{ github.token }}
+            exclude_types: "draft|prerelease"
+            view_top: 1
 
+      - uses: actions/setup-java@v3
+        if: ${{ matrix.runtime != 'linux-fedora-x64' }}
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          architecture: ${{ matrix.arch }}
+
+      - name: Setup Cl
+        run: ${{ matrix.setupCl }}
+
+
+
+      - name: Build rpm Package
+        if: ${{ matrix.runtime == 'linux-fedora-x64' }}
+        uses: Syer10/Fedora-Java17-Action@v1
+        with:
+          command: ./gradlew ${{ matrix.build }} --stacktrace
+
+      - name: Build
+        if: ${{ matrix.runtime != 'linux-fedora-x64' }}
+        uses: gradle/gradle-build-action@v2
+        with:
+          arguments: >
+            ${{ matrix.build }}
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        if: ${{ matrix.runtime == 'android' }}
+        with:
+          releaseDirectory: android/build/outputs/apk/standard/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+
+      # Upload runner package tar.gz/zip as artifact
+      - name: Publish Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: runner-package-${{ matrix.runtime }}
+          path: |
+            desktop/build/compose/binaries/main/*/
+            desktop/build/compose/jars/
+            !desktop/build/compose/binaries/main/app/
+            ${{ env.SIGNED_RELEASE_FILE }}
+
+        # Upload runner errors
+      - name: Upload error logs
+        uses: actions/upload-artifact@v3
+        if: ${{ failure() }}
+        with:
+          name: runner-errors-${{ matrix.runtime }}
+          path: |
+            desktop/build/compose/logs/
       - name: Prepare build
         run: |
           set -e
@@ -65,62 +161,13 @@ jobs:
             | jq -r '.[]|"- \(.message | first) (@\(.username))"')
           {delimiter}" >> $GITHUB_ENV
           mkdir -p ~/.android/ && echo "${{ secrets.DEBUG_KEYSTORE }}" | base64 --decode > ~/.android/debug.keystore
-      - name: Build APK
-        uses: gradle/gradle-command-action@v2
-        with:
-          arguments: assembleStandardPreview
-
-      - name: Clean up build artifacts
-        run: |
-          set -e
-          cp app/build/outputs/apk/standard/preview/app-standard-universal-preview.apk ireader-r${{ env.COMMIT_COUNT }}.apk
-          sha=`sha256sum ireader-r${{ env.COMMIT_COUNT }}.apk | awk '{ print $1 }'`
-          echo "APK_UNIVERSAL_SHA=$sha" >> $GITHUB_ENV
-          cp app/build/outputs/apk/standard/preview/app-standard-arm64-v8a-preview.apk ireader-arm64-v8a-r${{ env.COMMIT_COUNT }}.apk
-          sha=`sha256sum ireader-arm64-v8a-r${{ env.COMMIT_COUNT }}.apk | awk '{ print $1 }'`
-          echo "APK_ARM64_V8A_SHA=$sha" >> $GITHUB_ENV
-          cp app/build/outputs/apk/standard/preview/app-standard-armeabi-v7a-preview.apk ireader-armeabi-v7a-r${{ env.COMMIT_COUNT }}.apk
-          sha=`sha256sum ireader-armeabi-v7a-r${{ env.COMMIT_COUNT }}.apk | awk '{ print $1 }'`
-          echo "APK_ARMEABI_V7A_SHA=$sha" >> $GITHUB_ENV
-          cp app/build/outputs/apk/standard/preview/app-standard-x86-preview.apk ireader-x86-r${{ env.COMMIT_COUNT }}.apk
-          sha=`sha256sum ireader-x86-r${{ env.COMMIT_COUNT }}.apk | awk '{ print $1 }'`
-          echo "APK_X86_SHA=$sha" >> $GITHUB_ENV
-          cp app/build/outputs/apk/standard/preview/app-standard-x86_64-preview.apk ireader-x86_64-r${{ env.COMMIT_COUNT }}.apk
-          sha=`sha256sum ireader-x86_64-r${{ env.COMMIT_COUNT }}.apk | awk '{ print $1 }'`
-          echo "APK_X86_64_SHA=$sha" >> $GITHUB_ENV
-      - name: Create release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: r${{ env.COMMIT_COUNT }}
-          name: IReader Preview r${{ env.COMMIT_COUNT }}
-          body: |
-            ### Commits
-            https://github.com/ireaderorg/ireader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
-            ${{ env.COMMIT_LOGS }}
-            ---
-            ### Checksums
-            | Variant | SHA-256 |
-            | ------- | ------- |
-            | Universal | ${{ env.APK_UNIVERSAL_SHA }}
-            | arm64-v8a | ${{ env.APK_ARM64_V8A_SHA }}
-            | armeabi-v7a | ${{ env.APK_ARMEABI_V7A_SHA }}
-            | x86 | ${{ env.APK_X86_SHA }} |
-            | x86_64 | ${{ env.APK_X86_64_SHA }} |
-          files: |
-            ireader-r${{ env.COMMIT_COUNT }}.apk
-            ireader-arm64-v8a-r${{ env.COMMIT_COUNT }}.apk
-            ireader-armeabi-v7a-r${{ env.COMMIT_COUNT }}.apk
-            ireader-x86-r${{ env.COMMIT_COUNT }}.apk
-            ireader-x86_64-r${{ env.COMMIT_COUNT }}.apk
-          draft: ${{ github.event.inputs.dry-run != '' }}
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Prune old releases
-        uses: dev-drprasad/delete-older-releases@v0.2.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          keep_latest: 28
-          delete_tags: true
+        - uses: ncipollo/release-action@v1
+          with:
+            artifacts: "*/binaries/main/*/*.*,*/jars/*.jar,*/android/build/outputs/apk/standard/release/*.apk"
+            token: ${{ secrets.WINGET_PUBLISH_PAT }}
+            repo: IReader-Preview
+            tag: r${{ env.COMMIT_COUNT }}
+            name: Tachidesk-JUI Preview r${{ env.COMMIT_COUNT }}
+            body: |
+              ### Commits
+              https://github.com/ireaderorg/ireader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
