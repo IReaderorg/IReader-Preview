@@ -163,13 +163,13 @@ jobs:
             | jq -r '.[]|"- \(.message | first) (@\(.username))"')
           {delimiter}" >> $GITHUB_ENV
           mkdir -p ~/.android/ && echo "${{ secrets.DEBUG_KEYSTORE }}" | base64 --decode > ~/.android/debug.keystore
-        - uses: ncipollo/release-action@v1
-          with:
-            artifacts: "*/binaries/main/*/*.*,*/jars/*.jar,*/android/build/outputs/apk/standard/release/*.apk"
-            token: ${{ secrets.WINGET_PUBLISH_PAT }}
-            repo: IReader-Preview
-            tag: r${{ env.COMMIT_COUNT }}
-            name: Tachidesk-JUI Preview r${{ env.COMMIT_COUNT }}
-            body: |
-              ### Commits
-              https://github.com/ireaderorg/ireader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
+      - uses: ncipollo/release-action@v1
+        with:
+          artifacts: "*/binaries/main/*/*.*,*/jars/*.jar,*/android/build/outputs/apk/standard/release/*.apk"
+          token: ${{ secrets.WINGET_PUBLISH_PAT }}
+          repo: IReader-Preview
+          tag: r${{ env.COMMIT_COUNT }}
+          name: Tachidesk-JUI Preview r${{ env.COMMIT_COUNT }}
+          body: |
+            ### Commits
+            https://github.com/ireaderorg/ireader/compare/${{ env.PREV_RELEASE_SHA }}...${{ env.CURRENT_SHA }}
