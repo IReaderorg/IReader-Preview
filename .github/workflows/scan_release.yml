@@ -16,3 +16,7 @@ jobs:
           update_release_body: true
           files: |
             .apk$
+            .jar$
+            .msi$
+            .deb$
+            .rpm$
